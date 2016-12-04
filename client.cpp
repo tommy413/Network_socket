@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sstream>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -12,32 +13,9 @@
 #include <errno.h>
 #include <time.h> 
 
-#define BLEN 1024
+#define BLEN 10240
 
 using namespace std;
-
-bool action(string req,int sockfd){	//0 for success
-	string cmd=""
-	string ans[1005];
-	int findpos;
-
-	if ((findpos=req.find("#")) >= 0){
-		cmd = req.substr(0,findpos);
-		req = req.substr(findpos,req.size()-findpos);
-	}
-	else {
-		cmd = req;
-	}
-
-	if (cmd=="Exit"){
-		ans[0]=recv(sockfd);
-		cout<<ans[0]<<endl;
-		return 0;
-	}
-	else if (cmd==""){
-
-	}
-}
 
 bool send_msg(int sockfd, string msg){	//0 for success
 	msg=msg+"\r\n";
@@ -51,26 +29,59 @@ bool send_msg(int sockfd, string msg){	//0 for success
 string recv_msg(int sockfd){
 	char buf[BLEN];
 	char *bptr=buf;
-	int n=0;
 	int buflen=BLEN;
 	string ans="";
 
 	memset(buf, '\0', sizeof(buf)); 
 
-	while ((n = recv(sockfd, bptr, buflen, 0)) > 0) {
-		bptr+= n;
-		buflen-= n;
-		if (buflen<=0){
-			string tmp(buf);
-			ans=ans+tmp;
-			bptr-=BLEN;
-			buflen+=BLEN;
-		}
-		if (*(bptr-1)=='\n' && *(bptr-2)=='\r') break;
+	if (recv(sockfd, bptr, buflen, 0) < 0 ){
+		cout<<"Recieving Error!"<<endl;
 	}
 	string tmp(buf);
-	ans=ans+tmp.substr(0,tmp.size()-2);
+	ans=tmp;
 	return ans;
+}
+
+bool action(string req,int sockfd){	//0 for success
+	string cmd="";
+	string ans;
+	int findpos;
+
+	if ((findpos=req.find("#")) >= 0){
+		cmd = req.substr(0,findpos);
+		req = req.substr(findpos+1,req.size()-findpos);
+	}
+	else {
+		cmd = req;	
+	}
+
+	if (cmd=="Exit"){
+		ans=recv_msg(sockfd);
+		cout<<ans<<endl;
+		return 0;
+	}
+	else if (cmd=="REGISTER"){
+		ans=recv_msg(sockfd);
+		cout<<ans<<endl;
+		return 0;
+	}
+	else if (cmd=="List"){
+		ans=recv_msg(sockfd);
+		if (ans=="220 AUTH_FAIL")return 1;
+		for (int i = 0; i < ans.size(); ++i)
+		{
+			if (ans[i]=='#')ans[i]='\t';
+		}
+		cout<<ans<<endl;
+		return 0;
+	}
+	else {
+		if (action("List",sockfd)>0){
+			cout<<"Login Failed!"<<endl;
+		}
+		return 0;
+	}
+	return 1;
 }
 
 bool client_socket(const char* ip, int port){	//0 for success
@@ -93,12 +104,14 @@ bool client_socket(const char* ip, int port){	//0 for success
     		cout<<"Could not connect to host"<<endl;
 			return 1;
     	}
-    	cout<<"Connection accepted"<<endl;
-    	//finish connection
-    	
+
     	string req;
     	string ans="test";
 
+    	ans=recv_msg(c_socket);
+    	cout<<ans<<endl;
+    	//finish connection
+    	
     	cout<<"Enter your message:"<<endl;
     	while (getline(cin,req)){
     		send_msg(c_socket,req);
