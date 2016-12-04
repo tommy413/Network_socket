@@ -18,7 +18,7 @@
 using namespace std;
 
 bool send_msg(int sockfd, string msg){	//0 for success
-	msg=msg+"\r\n";
+	//msg=msg+"\r\n";
 	if (send(sockfd,msg.c_str(),msg.size(),0)<0){
 		cout<<"Error: Sending msg."<<endl;
 		return 1;
@@ -67,7 +67,6 @@ bool action(string req,int sockfd){	//0 for success
 	}
 	else if (cmd=="List"){
 		ans=recv_msg(sockfd);
-		if (ans=="220 AUTH_FAIL")return 1;
 		for (int i = 0; i < ans.size(); ++i)
 		{
 			if (ans[i]=='#')ans[i]='\t';
@@ -76,9 +75,7 @@ bool action(string req,int sockfd){	//0 for success
 		return 0;
 	}
 	else {
-		if (action("List",sockfd)>0){
-			cout<<"Login Failed!"<<endl;
-		}
+		action("List",sockfd);
 		return 0;
 	}
 	return 1;
