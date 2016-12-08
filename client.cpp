@@ -13,12 +13,11 @@
 #include <errno.h>
 #include <time.h> 
 
-#define BLEN 10240
+#define BLEN 102400
 
 using namespace std;
 
 bool send_msg(int sockfd, string msg){	//0 for success
-	//msg=msg+"\r\n";
 	if (send(sockfd,msg.c_str(),msg.size(),0)<0){
 		cout<<"Error: Sending msg."<<endl;
 		return 1;
@@ -42,7 +41,7 @@ string recv_msg(int sockfd){
 	return ans;
 }
 
-bool display_option(string* options){
+bool display_option(string* options){ //0 for success
 	int count=atoi(options[0].c_str());
 	cout<<"Choose Request:"<<endl;
 	for (int i = 1; i <= count; ++i)
@@ -50,13 +49,13 @@ bool display_option(string* options){
 		cout<<i<<". "<<options[i]<<endl;
 	}
 	cout<<"(Please enter the corresponding request index.)"<<endl;
-	return 1;
+	return 0;
 }
 
 string make_req(string req,string* options){
 	int choice=atoi(req.c_str());
 	cout<<endl;
-	if (choice > atoi(options[0].c_str())){
+	if (choice > atoi(options[0].c_str()) || choice <= 0){
 		cout<<"No corresponding request!!!"<<endl;
 		return "error";
 	}
@@ -185,6 +184,7 @@ bool client_socket(const char* ip, int port){	//0 for success
     	display_option(options);
     	while (getline(cin,req)){
     		if ((reqstr=make_req(req,options))=="error"){
+    			cout<<endl;
     			display_option(options);
     			continue;
     		}
@@ -192,10 +192,12 @@ bool client_socket(const char* ip, int port){	//0 for success
     		sleep(0.25);
     		cout<<"Output:"<<endl<<endl;
     		fail=action(reqstr,c_socket);
+
     		if (post_action(fail,options,atoi(req.c_str()))){
     			close(c_socket);
     			break;
     		}
+    		
     	}
 
     	if (reqstr!="Exit"){
