@@ -1,1 +1,0 @@
-g++ client.cpp -lpthread -o client.out
