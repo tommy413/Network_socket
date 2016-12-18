@@ -63,13 +63,16 @@ bool client_socket(const char* ip, int port){	//0 for success
     	}
 
     	//finish connection
+    	string ans ;
+    	ans=recv_msg(c_socket);
+    	cout<<ans<<endl;
     	string req="";
     	cout<<"Enter Request:"<<endl;
     	
     	while (getline(cin,req)){
     		send_msg(c_socket,req);
     		sleep(0.25);
-    		string ans = recv_msg(c_socket);
+    		ans = recv_msg(c_socket);
     		cout<<"Output:"<<endl<<ans<<endl;
     		if (req=="Exit")break;
     		cout<<"Enter Request:";
