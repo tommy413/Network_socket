@@ -65,7 +65,9 @@ string make_req(string req,string* options){
 	if (act=="Register"){
 		cout<<"Account Name?"<<endl;
 		getline(cin,args[0]);
-		return "REGISTER#"+args[0];
+		cout<<"Money?"<<endl;
+		getline(cin,args[1]);
+		return "REGISTER#"+args[0]+"#"+args[1];
 	}
 	else if (act=="Login"){
 		cout<<"Account Name?"<<endl;

@@ -14,6 +14,7 @@
 #include <time.h>
 #include <pthread.h> 
 #include <queue>
+#include <map>
 
 #define MaxThread 2
 #define BLEN 102400
@@ -21,18 +22,36 @@
 using namespace std;
 
 int maxfd=0;
+int OnlineNum=0;
 queue<int> socketQ;
 queue<pthread_t> worker_pool;
-pthread_mutex_t Qlock,IOlock;
-fd_set readfds,users;
+pthread_mutex_t Qlock,IOlock,DataLock;
+fd_set readfds,userfds;
+map<string , int > accounts;
+map<string , pair<string,int> > online;
+map<int , string> sock2account;
+map<int , sockaddr_in> sock2addr;
 
-void printip(sockaddr_in* ip){
-	printf("%d.%d.%d.%d",
-  			int(ip->sin_addr.s_addr&0xFF),
-  			int((ip->sin_addr.s_addr&0xFF00)>>8),
-  			int((ip->sin_addr.s_addr&0xFF0000)>>16),
-  			int((ip->sin_addr.s_addr&0xFF000000)>>24));
-	return ;
+int stoi(string s){
+	int i=-1;
+	istringstream sin(s);
+	sin>>i;
+	return i;
+}
+
+string itos(int i){
+	ostringstream sout;
+	sout<<i;
+	return sout.str();
+}
+
+string getip(sockaddr_in* ip){
+	ostringstream sout;
+	sout<<int(ip->sin_addr.s_addr&0xFF)<<"."<<
+  			int((ip->sin_addr.s_addr&0xFF00)>>8)<<"."<<
+  			int((ip->sin_addr.s_addr&0xFF0000)>>16)<<"."<<
+  			int((ip->sin_addr.s_addr&0xFF000000)>>24);
+	return sout.str();
 }
 
 bool send_msg(int sockfd, string msg){	//0 for success
@@ -51,13 +70,116 @@ string recv_msg(int sockfd){
 
 	memset(buf, '\0', sizeof(buf)); 
 
-	if (recv(sockfd, bptr, buflen, 0) < 0 ){
+	int n = recv(sockfd, bptr, buflen, 0);
+	if ( n < 0 ){
 		cout<<"Recieving Error!"<<endl;
 		return "error";
+	}
+	if (n==0){
+		return "Connection cut";
 	}
 	string tmp(buf);
 	ans=tmp;
 	return ans;
+}
+
+bool action(string req, int connectfd){
+	int findpos,squpos;
+	map<string , pair<string,int> >::iterator online_it;
+	map<string , int >::iterator accounts_it;
+	string ans="";
+	if ((findpos=req.find("REGISTER"))>=0){
+		squpos=req.find("#");
+		req = req.substr(squpos+1,req.size()-squpos);
+		squpos=req.find("#");
+		string acc = req.substr(0,squpos);
+		int money = stoi(req.substr(squpos+1,req.size()-squpos));
+		pthread_mutex_lock(&DataLock);
+		accounts_it = accounts.find(acc);
+		if (accounts_it==accounts.end()){
+			accounts[acc] = money;
+			pthread_mutex_unlock(&DataLock);	
+			ans = "100 OK\n";
+			send_msg(connectfd,ans);
+			return 0;
+		}
+		else {
+			pthread_mutex_unlock(&DataLock);
+			ans = "210 FAIL\n";
+			send_msg(connectfd,ans);
+			return 1;
+		}
+	}
+	else if ((findpos=req.find("List"))>=0){	//List
+		pthread_mutex_lock(&DataLock);
+		ans="accountBalance : " + itos(accounts[sock2account[connectfd]])+"\n";
+		ans=ans+"NumberOfAccountsOnline : " + itos(OnlineNum) +"\n";
+		for (online_it=online.begin(); online_it!=online.end(); ++online_it)
+		{
+			pair<string,int> info = online_it->second;
+			ans=ans+online_it->first+"#"+info.first+"#"+itos(info.second)+"\n";
+		}
+		pthread_mutex_unlock(&DataLock);
+		send_msg(connectfd,ans);
+		return 0;
+	}
+	else if ((findpos=req.find("Exit"))>=0){	//Exit
+		pthread_mutex_lock(&DataLock);
+		online.erase(sock2account[connectfd]);
+		sock2account.erase(connectfd);
+		sock2addr.erase(connectfd);
+		OnlineNum--;
+		pthread_mutex_unlock(&DataLock);
+		send_msg(connectfd, "bye");
+		close(connectfd);
+		FD_CLR(connectfd,&userfds);
+		return 0;
+	}
+	else {	//login
+		squpos=req.find("#");
+		if (squpos<0){
+			ans = "Usage Error\n";
+			send_msg(connectfd,ans);
+			return 1;
+		}
+		string acc = req.substr(0,squpos);
+		int port = stoi(req.substr(squpos+1,req.size()-squpos));
+		if ((port > 65535) || (port < 2000)) {
+			ans = "Please enter a port number between 2000 - 65535\n";
+			send_msg(connectfd,ans);
+			return 1;
+		}
+		pthread_mutex_lock(&DataLock);
+		accounts_it = accounts.find(acc);
+		if (accounts_it!=accounts.end()){
+			sock2account[connectfd]=acc;
+			online_it = online.find(acc);
+			if (online_it!=online.end()){
+				pthread_mutex_unlock(&DataLock);
+				ans = "The account has already logined!\n";
+				send_msg(connectfd,ans);
+				return 1;
+			}
+			online[acc] = make_pair(getip(&sock2addr[connectfd]),port);//TODO:重複登入
+			OnlineNum++;
+			ans="accountBalance : " + itos(accounts[sock2account[connectfd]])+"\n";
+			ans=ans+"NumberOfAccountsOnline : " + itos(OnlineNum) +"\n";
+			for (online_it=online.begin(); online_it!=online.end(); ++online_it)
+			{
+				pair<string,int> info = online_it->second;
+				ans=ans+online_it->first+"#"+info.first+"#"+itos(info.second)+"\n";
+			}
+			pthread_mutex_unlock(&DataLock);
+			send_msg(connectfd,ans);
+			return 0;
+		}
+		else {
+			pthread_mutex_unlock(&DataLock);
+			ans = "220 AUTH_FAIL\n";
+			send_msg(connectfd,ans);
+			return 1;
+		}
+	}
 }
 
 void* handle(void* DummyPT){
@@ -75,25 +197,21 @@ void* handle(void* DummyPT){
 			pthread_mutex_unlock(&Qlock);
 			continue;
 		}
+
 		string entry="";
 		if(connectfd >= 0) {
 			entry = recv_msg(connectfd);
 			pthread_mutex_lock(&IOlock);
-    	    cout << entry << endl;
-    	    if(entry == "Exit"){
-    	        send_msg(connectfd, "Bye");
-    	        cout << "Enter response: Bye\n";
-    	        pthread_mutex_unlock(&IOlock);
-    	        FD_CLR(connectfd,&users);
-    	        close(connectfd);
-        	}
-        	else {
-        		cout << " response: ";
-        		cout << entry <<endl;;
-        		pthread_mutex_unlock(&IOlock);
-        		send_msg(connectfd, entry);
-        	}
-        	
+    	    if (entry=="Connection cut"){
+    	    	cout << entry << endl;
+    	    	pthread_mutex_unlock(&IOlock);
+    	    	close(connectfd);
+    	    	FD_CLR(connectfd,&userfds);
+    	    }
+    	    else {
+    	    	pthread_mutex_unlock(&IOlock);
+    	    	action(entry,connectfd);
+    	    }
     	}
 	}
     return NULL;
@@ -114,7 +232,7 @@ void* manage(void* SocketPT){
 	socklen_t client_len= sizeof(clin_addr);
 		
 	while (1){
-		readfds=users;
+		readfds=userfds;
 		select(maxfd+1,&readfds,NULL,NULL,NULL);
 		for (int i = 0; i <= maxfd; ++i)
 		{
@@ -127,19 +245,14 @@ void* manage(void* SocketPT){
 			    		pthread_mutex_unlock(&IOlock);
  				   		continue;
     				}
+    				sock2addr[connectfd]=clin_addr;
     				send_msg(connectfd,"Connection Success!!\n");
-    				pthread_mutex_lock(&IOlock);
-    				cout<<connectfd<<endl;
-    				printip(&clin_addr);
-    				cout<<endl;
-    				pthread_mutex_unlock(&IOlock);
-    				FD_SET(connectfd,&users);
+    				FD_SET(connectfd,&userfds);
     				maxfd=max(maxfd,connectfd);
 				}
 				else {
 					pthread_mutex_lock(&Qlock);
 					socketQ.push(i);
-					cout<<"Pushing:"<<i<<endl;
 					pthread_mutex_unlock(&Qlock);
 					sleep(1.5);
 				}
@@ -155,8 +268,9 @@ bool server_socket(int port){	//0 for success
 	struct sockaddr_in serv_addr,clin_addr;
 	pthread_mutex_init(&Qlock,NULL);
 	pthread_mutex_init(&IOlock,NULL);
+	pthread_mutex_init(&DataLock,NULL);
 	FD_ZERO(&readfds);
-	FD_ZERO(&users);
+	FD_ZERO(&userfds);
 	pthread_t manager,accepter;
 
 	while (!socketQ.empty())socketQ.pop();
@@ -182,21 +296,38 @@ bool server_socket(int port){	//0 for success
     }
 
     makeThread();
-    FD_SET(s_socket,&users);
+    FD_SET(s_socket,&userfds);
     maxfd=max(s_socket,maxfd);
     pthread_create(&manager,NULL,&manage,&s_socket);
     
-    /*string cmd;
+    string cmd;
+    map<string , pair<string,int> >::iterator online_it;
+	map<string , int >::iterator accounts_it;
+	map<int, string>::iterator sock2account_it;
     while(cin>>cmd){
     	if (cmd=="Close")break;
-    }*/
-
-    pthread_join(manager,NULL);
-    while(!socketQ.empty()){}
+    	if (cmd=="List_Account"){
+    		for (accounts_it = accounts.begin(); accounts_it != accounts.end(); ++accounts_it)
+    		{
+    			cout<<accounts_it->first<<" "<<accounts_it->second<<endl;
+    		}
+    	}
+    	if (cmd=="List_Online"){
+    		for (online_it = online.begin(); online_it != online.end(); ++online_it)
+    		{
+    			cout<<online_it->first<<" "<<online_it->second.first<<" "<<online_it->second.second<<endl;
+    		}
+    	}
+    	if (cmd=="List_Socket"){
+    		for (sock2account_it = sock2account.begin(); sock2account_it != sock2account.end(); ++sock2account_it)
+    		{
+    			cout<<sock2account_it->first<<" "<<sock2account_it->second<<endl;
+    		}
+    	}
+    }
 
     close(s_socket);
     return 0;
-
 }
 
 int main(int argc, char const *argv[]){
