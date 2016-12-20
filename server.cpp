@@ -25,7 +25,7 @@ int maxfd=0;
 int OnlineNum=0;
 queue<int> socketQ;
 queue<pthread_t> worker_pool;
-pthread_mutex_t Qlock,IOlock,DataLock;
+pthread_mutex_t Qlock,IOlock,Datalock,Selectlock;
 fd_set readfds,userfds;
 map<string , int > accounts;
 map<string , pair<string,int> > online;
@@ -94,24 +94,24 @@ bool action(string req, int connectfd){
 		squpos=req.find("#");
 		string acc = req.substr(0,squpos);
 		int money = stoi(req.substr(squpos+1,req.size()-squpos));
-		pthread_mutex_lock(&DataLock);
+		pthread_mutex_lock(&Datalock);
 		accounts_it = accounts.find(acc);
 		if (accounts_it==accounts.end()){
 			accounts[acc] = money;
-			pthread_mutex_unlock(&DataLock);	
+			pthread_mutex_unlock(&Datalock);	
 			ans = "100 OK\n";
 			send_msg(connectfd,ans);
 			return 0;
 		}
 		else {
-			pthread_mutex_unlock(&DataLock);
+			pthread_mutex_unlock(&Datalock);
 			ans = "210 FAIL\n";
 			send_msg(connectfd,ans);
 			return 1;
 		}
 	}
 	else if ((findpos=req.find("List"))>=0){	//List
-		pthread_mutex_lock(&DataLock);
+		pthread_mutex_lock(&Datalock);
 		ans="accountBalance : " + itos(accounts[sock2account[connectfd]])+"\n";
 		ans=ans+"NumberOfAccountsOnline : " + itos(OnlineNum) +"\n";
 		for (online_it=online.begin(); online_it!=online.end(); ++online_it)
@@ -119,17 +119,17 @@ bool action(string req, int connectfd){
 			pair<string,int> info = online_it->second;
 			ans=ans+online_it->first+"#"+info.first+"#"+itos(info.second)+"\n";
 		}
-		pthread_mutex_unlock(&DataLock);
+		pthread_mutex_unlock(&Datalock);
 		send_msg(connectfd,ans);
 		return 0;
 	}
 	else if ((findpos=req.find("Exit"))>=0){	//Exit
-		pthread_mutex_lock(&DataLock);
+		pthread_mutex_lock(&Datalock);
 		online.erase(sock2account[connectfd]);
 		sock2account.erase(connectfd);
 		sock2addr.erase(connectfd);
 		OnlineNum--;
-		pthread_mutex_unlock(&DataLock);
+		pthread_mutex_unlock(&Datalock);
 		send_msg(connectfd, "bye");
 		close(connectfd);
 		FD_CLR(connectfd,&userfds);
@@ -138,24 +138,24 @@ bool action(string req, int connectfd){
 	else {	//login
 		squpos=req.find("#");
 		if (squpos<0){
-			ans = "Usage Error\n";
+			ans = "200 Usage Error\n";
 			send_msg(connectfd,ans);
 			return 1;
 		}
 		string acc = req.substr(0,squpos);
 		int port = stoi(req.substr(squpos+1,req.size()-squpos));
 		if ((port > 65535) || (port < 2000)) {
-			ans = "Please enter a port number between 2000 - 65535\n";
+			ans = "200 Usage Error\n";
 			send_msg(connectfd,ans);
 			return 1;
 		}
-		pthread_mutex_lock(&DataLock);
+		pthread_mutex_lock(&Datalock);
 		accounts_it = accounts.find(acc);
 		if (accounts_it!=accounts.end()){
 			sock2account[connectfd]=acc;
 			online_it = online.find(acc);
 			if (online_it!=online.end()){
-				pthread_mutex_unlock(&DataLock);
+				pthread_mutex_unlock(&Datalock);
 				ans = "The account has already logined!\n";
 				send_msg(connectfd,ans);
 				return 1;
@@ -169,12 +169,12 @@ bool action(string req, int connectfd){
 				pair<string,int> info = online_it->second;
 				ans=ans+online_it->first+"#"+info.first+"#"+itos(info.second)+"\n";
 			}
-			pthread_mutex_unlock(&DataLock);
+			pthread_mutex_unlock(&Datalock);
 			send_msg(connectfd,ans);
 			return 0;
 		}
 		else {
-			pthread_mutex_unlock(&DataLock);
+			pthread_mutex_unlock(&Datalock);
 			ans = "220 AUTH_FAIL\n";
 			send_msg(connectfd,ans);
 			return 1;
@@ -201,10 +201,21 @@ void* handle(void* DummyPT){
 		string entry="";
 		if(connectfd >= 0) {
 			entry = recv_msg(connectfd);
+			//cout<<entry<<endl;
 			pthread_mutex_lock(&IOlock);
     	    if (entry=="Connection cut"){
-    	    	cout << entry << endl;
+    	    	cout << entry <<" : "<<itos(connectfd)<< endl;
     	    	pthread_mutex_unlock(&IOlock);
+    	    	pthread_mutex_lock(&Datalock);
+    	    	map<int , string>::iterator sock_it;
+    	    	sock_it = sock2account.find(connectfd);
+				if (sock_it!=sock2account.end()){
+					online.erase(sock2account[connectfd]);
+					sock2account.erase(connectfd);
+					OnlineNum--;
+				}
+				sock2addr.erase(connectfd);
+				pthread_mutex_unlock(&Datalock);
     	    	close(connectfd);
     	    	FD_CLR(connectfd,&userfds);
     	    }
@@ -212,6 +223,9 @@ void* handle(void* DummyPT){
     	    	pthread_mutex_unlock(&IOlock);
     	    	action(entry,connectfd);
     	    }
+    	}
+    	else if(connectfd == -1){
+    		pthread_mutex_unlock(&Selectlock);
     	}
 	}
     return NULL;
@@ -232,6 +246,7 @@ void* manage(void* SocketPT){
 	socklen_t client_len= sizeof(clin_addr);
 		
 	while (1){
+		pthread_mutex_lock(&Selectlock);
 		readfds=userfds;
 		select(maxfd+1,&readfds,NULL,NULL,NULL);
 		for (int i = 0; i <= maxfd; ++i)
@@ -254,11 +269,12 @@ void* manage(void* SocketPT){
 					pthread_mutex_lock(&Qlock);
 					socketQ.push(i);
 					pthread_mutex_unlock(&Qlock);
-					sleep(1.5);
 				}
 			}
 		}
-
+		pthread_mutex_lock(&Qlock);
+		socketQ.push(-1);
+		pthread_mutex_unlock(&Qlock);
 	}
 	return NULL;
 }
@@ -268,7 +284,8 @@ bool server_socket(int port){	//0 for success
 	struct sockaddr_in serv_addr,clin_addr;
 	pthread_mutex_init(&Qlock,NULL);
 	pthread_mutex_init(&IOlock,NULL);
-	pthread_mutex_init(&DataLock,NULL);
+	pthread_mutex_init(&Datalock,NULL);
+	pthread_mutex_init(&Selectlock,NULL);
 	FD_ZERO(&readfds);
 	FD_ZERO(&userfds);
 	pthread_t manager,accepter;
