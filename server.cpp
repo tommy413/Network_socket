@@ -16,22 +16,23 @@
 #include <queue>
 #include <map>
 
-#define MaxThread 2
+#define MaxThread 2 					//worker_pool內的Thread總數
 #define BLEN 102400
 
 using namespace std;
 
 int maxfd=0;
-int OnlineNum=0;
-queue<int> socketQ;
+int OnlineNum=0;						//線上人數
+queue<int> socketQ;						//等待worker_pool處理的socket
 queue<pthread_t> worker_pool;
 pthread_mutex_t Qlock,IOlock,Datalock,Selectlock;
 fd_set readfds,userfds;
-map<string , int > accounts;
-map<string , pair<string,int> > online;
+map<string , int > accounts;			//以註冊的帳戶資訊
+map<string , pair<string,int> > online;	//線上的帳戶資訊
 map<int , string> sock2account;
 map<int , sockaddr_in> sock2addr;
 
+//字串轉整數
 int stoi(string s){
 	int i=-1;
 	istringstream sin(s);
@@ -39,12 +40,14 @@ int stoi(string s){
 	return i;
 }
 
+//整數轉字串
 string itos(int i){
 	ostringstream sout;
 	sout<<i;
 	return sout.str();
 }
 
+//格式化ip字串
 string getip(sockaddr_in* ip){
 	ostringstream sout;
 	sout<<int(ip->sin_addr.s_addr&0xFF)<<"."<<
@@ -83,12 +86,13 @@ string recv_msg(int sockfd){
 	return ans;
 }
 
+//處理client所送來的request(邏輯部分)
 bool action(string req, int connectfd){
 	int findpos,squpos;
 	map<string , pair<string,int> >::iterator online_it;
 	map<string , int >::iterator accounts_it;
 	string ans="";
-	if ((findpos=req.find("REGISTER"))>=0){
+	if ((findpos=req.find("REGISTER"))>=0){	//register
 		squpos=req.find("#");
 		req = req.substr(squpos+1,req.size()-squpos);
 		squpos=req.find("#");
@@ -182,10 +186,16 @@ bool action(string req, int connectfd){
 	}
 }
 
+//worker所執行的函數
 void* handle(void* DummyPT){
 	int connectfd = -1;
 	pthread_t threadid = pthread_self();
 	while (1){
+		/*
+		監看SocketQ
+		若有工作，拿到socket編號並處理request
+		若沒有則繼續等待
+		 */
 		connectfd = -1;
 		pthread_mutex_lock(&Qlock);
 		if (!socketQ.empty()){
@@ -198,11 +208,14 @@ void* handle(void* DummyPT){
 			continue;
 		}
 
+		/*
+		如果之前有拿到Socket編號則處理request
+		 */
 		string entry="";
 		if(connectfd >= 0) {
 			entry = recv_msg(connectfd);
-			//cout<<entry<<endl;
 			pthread_mutex_lock(&IOlock);
+			//特別處理client Ctrl-C斷線的情況
     	    if (entry=="Connection cut"){
     	    	cout << entry <<" : "<<itos(connectfd)<< endl;
     	    	pthread_mutex_unlock(&IOlock);
@@ -219,11 +232,13 @@ void* handle(void* DummyPT){
     	    	close(connectfd);
     	    	FD_CLR(connectfd,&userfds);
     	    }
+    	    //正常request
     	    else {
     	    	pthread_mutex_unlock(&IOlock);
     	    	action(entry,connectfd);
     	    }
     	}
+    	//表示已到一次select的結尾，可以進行下一次的select(配合manage函數)
     	else if(connectfd == -1){
     		pthread_mutex_unlock(&Selectlock);
     	}
@@ -231,6 +246,7 @@ void* handle(void* DummyPT){
     return NULL;
 }
 
+//創立worker_pool
 void makeThread(){
 	pthread_t tmp;
 	while (worker_pool.size()<MaxThread){
@@ -246,12 +262,14 @@ void* manage(void* SocketPT){
 	socklen_t client_len= sizeof(clin_addr);
 		
 	while (1){
+		//預防一個request因為worker處理較慢而被select很多次的狀況，因此用mutex來控制
 		pthread_mutex_lock(&Selectlock);
 		readfds=userfds;
 		select(maxfd+1,&readfds,NULL,NULL,NULL);
 		for (int i = 0; i <= maxfd; ++i)
 		{
 			if (FD_ISSET(i,&readfds)){
+				//有新連線
 				if (i==s_socket){
 					connectfd = accept(s_socket, (struct sockaddr *) &clin_addr, &client_len);
     				if (connectfd<0){
@@ -265,6 +283,7 @@ void* manage(void* SocketPT){
     				FD_SET(connectfd,&userfds);
     				maxfd=max(maxfd,connectfd);
 				}
+				//client有新request
 				else {
 					pthread_mutex_lock(&Qlock);
 					socketQ.push(i);
@@ -272,6 +291,7 @@ void* manage(void* SocketPT){
 				}
 			}
 		}
+		//以-1表示一輪select的結尾
 		pthread_mutex_lock(&Qlock);
 		socketQ.push(-1);
 		pthread_mutex_unlock(&Qlock);
@@ -315,7 +335,7 @@ bool server_socket(int port){	//0 for success
     makeThread();
     FD_SET(s_socket,&userfds);
     maxfd=max(s_socket,maxfd);
-    pthread_create(&manager,NULL,&manage,&s_socket);
+    pthread_create(&manager,NULL,&manage,&s_socket);	//負責select的thread
     
     string cmd;
     map<string , pair<string,int> >::iterator online_it;
