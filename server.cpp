@@ -15,6 +15,11 @@
 #include <pthread.h> 
 #include <queue>
 #include <map>
+#include <malloc.h>
+#include <netinet/in.h>
+#include <resolv.h>
+#include "openssl/ssl.h"
+#include "openssl/err.h"
 
 #define MaxThread 2 					//worker_pool內的Thread總數
 #define BLEN 102400

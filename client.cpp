@@ -13,6 +13,10 @@
 #include <errno.h>
 #include <time.h>
 #include <pthread.h>
+#include <malloc.h>
+#include <resolv.h>
+#include "openssl/ssl.h"
+#include "openssl/err.h"
 
 #define BLEN 102400
 
