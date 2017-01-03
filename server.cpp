@@ -139,6 +139,36 @@ bool action(string req, int connectfd){
 		FD_CLR(connectfd,&userfds);
 		return 0;
 	}
+	else if ((findpos=req.find("Trade"))>=0){	//Trade
+		squpos=req.find("#");
+		req = req.substr(squpos+1,req.size()-squpos);
+
+		online_it = online.find(req);
+		if (online_it!=online.end()){
+			ans = online[req].first+"#"+itos(online[req].second);
+			send_msg(connectfd,ans);
+			return 0;
+		}
+		send_msg(connectfd,"The user is not online!!!");
+		return 1;
+	}
+	else if ((findpos=req.find("Change"))>=0){	//Change
+		squpos=req.find("#");
+		req = req.substr(squpos+1,req.size()-squpos);
+		squpos=req.find("#");
+		string acc = req.substr(0,squpos);
+		int money = stoi(req.substr(squpos+1,req.size()-squpos));
+
+		accounts_it = accounts.find(acc);
+		if (accounts_it != accounts.end()){
+			accounts[acc]=accounts[acc]+money;
+			ans="OK";
+			send_msg(connectfd,ans);
+			return 0;
+		}
+		send_msg(connectfd,"Changing Failed!!! Please Retransmit the request again!!!");
+		return 1;
+	}
 	else {	//login
 		squpos=req.find("#");
 		if (squpos<0){
